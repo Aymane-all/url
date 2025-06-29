@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const dns = require('dns');
-const url = require('url');
 const app = express();
 
 // Basic Configuration
@@ -10,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 
-// Body parsing middleware - this should be at the top level
+// Body parsing middleware - MUST be before routes
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
@@ -25,63 +24,100 @@ app.get('/api/hello', function(req, res) {
   res.json({ greeting: 'hello API' });
 });
 
-// In-memory storage for URLs (in production, you'd use a database)
-let urlDatabase = {};
+// In-memory storage for URLs
+let urlDatabase = [];
 let urlCounter = 1;
+
+// Helper function to validate URL format
+function isValidUrl(string) {
+  try {
+    // Check if it starts with http:// or https://
+    if (!string.startsWith('http://') && !string.startsWith('https://')) {
+      return false;
+    }
+    
+    const url = new URL(string);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch (err) {
+    return false;
+  }
+}
 
 // POST endpoint to create short URL
 app.post('/api/shorturl', (req, res) => {
   const originalUrl = req.body.url;
   
+  console.log('Received URL:', originalUrl); // Debug log
+  
+  // Check if URL is provided
+  if (!originalUrl) {
+    return res.json({ error: 'invalid url' });
+  }
+  
   // Validate URL format
-  let parsedUrl;
+  if (!isValidUrl(originalUrl)) {
+    return res.json({ error: 'invalid url' });
+  }
+  
+  // Extract hostname for DNS lookup
+  let hostname;
   try {
-    parsedUrl = new URL(originalUrl);
+    const urlObj = new URL(originalUrl);
+    hostname = urlObj.hostname;
   } catch (err) {
     return res.json({ error: 'invalid url' });
   }
   
-  // Check if it's http or https
-  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-    return res.json({ error: 'invalid url' });
-  }
-  
   // Use dns.lookup to verify the hostname exists
-  dns.lookup(parsedUrl.hostname, (err, address) => {
+  dns.lookup(hostname, (err, address) => {
     if (err) {
+      console.log('DNS lookup failed for:', hostname, err.message); // Debug log
       return res.json({ error: 'invalid url' });
     }
     
+    console.log('DNS lookup successful for:', hostname, 'Address:', address); // Debug log
+    
     // Check if URL already exists in database
-    for (let shortUrl in urlDatabase) {
-      if (urlDatabase[shortUrl] === originalUrl) {
-        return res.json({
-          original_url: originalUrl,
-          short_url: parseInt(shortUrl)
-        });
-      }
+    const existingEntry = urlDatabase.find(entry => entry.original_url === originalUrl);
+    if (existingEntry) {
+      return res.json({
+        original_url: existingEntry.original_url,
+        short_url: existingEntry.short_url
+      });
     }
     
     // Store the URL with a short identifier
-    const shortUrl = urlCounter++;
-    urlDatabase[shortUrl] = originalUrl;
+    const newEntry = {
+      original_url: originalUrl,
+      short_url: urlCounter++
+    };
+    urlDatabase.push(newEntry);
+    
+    console.log('URL stored:', newEntry); // Debug log
     
     res.json({
       original_url: originalUrl,
-      short_url: shortUrl
+      short_url: newEntry.short_url
     });
   });
 });
 
 // GET endpoint to redirect to original URL
 app.get('/api/shorturl/:short_url', (req, res) => {
-  const shortUrl = req.params.short_url;
-  const originalUrl = urlDatabase[shortUrl];
+  const shortUrlId = parseInt(req.params.short_url);
   
-  if (originalUrl) {
-    res.redirect(originalUrl);
+  console.log('Looking for short URL:', shortUrlId); // Debug log
+  console.log('Current database:', urlDatabase); // Debug log
+  
+  // Find the URL entry
+  const urlEntry = urlDatabase.find(entry => entry.short_url === shortUrlId);
+  
+  if (urlEntry) {
+    console.log('Redirecting to:', urlEntry.original_url); // Debug log
+    res.redirect(urlEntry.original_url);
   } else {
-    res.json({ error: 'Short URL not found' });
+    console.log('Short URL not found:', shortUrlId); // Debug log
+    res.json({ error: 'No short URL found for the given input' });
   }
 });
 
